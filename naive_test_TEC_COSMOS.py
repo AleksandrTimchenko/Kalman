@@ -1,5 +1,5 @@
 import numpy as np
-import datetime
+from datetime import datetime
 from scipy.integrate import quad
 import matplotlib.pyplot as plt
 from matplotlib import cm
@@ -11,7 +11,7 @@ import pandas as pd
 
 import NeQuick_2
 
-
+start_time = datetime.now()
 # define main constants
 R = 6371.  # Earth radius in km
 R_sat = 7371.  # Radius of the satellites orbit in km
@@ -26,12 +26,10 @@ data1 = pd.read_table(directory, header = None, sep = '\s+', skiprows = 10)
 data1.columns = ['Time', 'Lat', 'Phase', 'Lon', 'Ampl', 'El', 'Az', 'TEC']
 
 
-data1 = data1[:100]
+#data1 = data1[:10000]
 #data_TEC = data[['Lat', 'TEC']]
 #data_TEC
 
-
-#plt.plot(data.Lat, data.TEC)
 
 class TRay:
    
@@ -65,7 +63,7 @@ class TGrid:
     height_nodes - количество узлов сетки по вертикали
     '''
     
-    def __init__(self, tay_left=5550., tay_right=8905.6, 
+    def __init__(self, tay_left=4000., tay_right=10500, 
                  height_down=0., height_up=1000., tay_nodes=101, height_nodes=61):
         self.tay_left = tay_left
         self.tay_right = tay_right
@@ -161,7 +159,7 @@ class Background:
 ####################################################################################
 
 
-def CreateRays(rec_tays, Grid, data1):
+def CreateRays(rec_tays, Grid, data_El, data_Az):
     
     """
     Создание лучей просвечивания приёмников.
@@ -170,16 +168,17 @@ def CreateRays(rec_tays, Grid, data1):
     Rays = []
 
     for rec_tay in rec_tays:
-        for b in data1.El:  # Ширина лучей приёмника, было arange(5, 180, 0.5)
-            for a in data1.Az:
-                if(
+        for b, a in zip(data_El,data_Az) :  # Ширина лучей приёмника, было arange(5, 180, 0.5)
+            if(
                 TRay(rec_tay, R_sat - R, b,a).tay_from_height(Grid.height_up) < Grid.tay_right
                 and TRay(rec_tay, R_sat - R, b,a).tay_from_height(Grid.height_up) > Grid.tay_left
                     ):
-                    Rays.append(TRay(rec_tay, R_sat - R, b,a))
+                Rays.append(TRay(rec_tay, R_sat - R, b,a))
+                
     '''
     условие if не даёт лучам выйти за пределы сформированной сетки
     '''
+    print(np.shape(Rays))
     return Rays
 
 
@@ -267,7 +266,7 @@ def ObsOperator(Grid, Rays):
 
         i = i + 1
         print(i)
-    return csr_matrix(A)  # A.tocsr()
+    return csr_matrix(A).tocsc()  # A.tocsc()
 
 def CovMatrixObs(Rays, sigma0=0.05):
     
@@ -280,7 +279,7 @@ def CovMatrixObs(Rays, sigma0=0.05):
     for i in range(len(Rays)):
         diag[i] = sigma0**2 / (np.sin(np.deg2rad(Rays[i].betta)))**2
     P.setdiag(diag)
-    return P.tocsr()
+    return P.tocsc()
 
     
 def CovMatrixModel(state, sigma=0.2):
@@ -293,7 +292,7 @@ def CovMatrixModel(state, sigma=0.2):
     diag = sigma**2 * state / max_state
     P = lil_matrix((len(state),len(state)))
     P.setdiag(diag)
-    return P.tocsr()
+    return P.tocsc()
     
 
 def kalman_step(apriory_state, cov_apriory_state, observe, cov_observe, observe_operator):
@@ -303,8 +302,22 @@ def kalman_step(apriory_state, cov_apriory_state, observe, cov_observe, observe_
     """
     
     S = cov_observe + observe_operator.dot(cov_apriory_state.dot(observe_operator.transpose()))
+
+    
+    print('shape S: ',np.shape(S), 'shape obs operator, transpose: ', np.shape(observe_operator.transpose()), 
+          'shape obs operator: ', np.shape(observe_operator),
+          'shape cov_apriory: ', np.shape(cov_apriory_state))
+    
+    # Ошибка выпадает при вычисление inv(S)
+    
     K = cov_apriory_state.dot(observe_operator.transpose().dot(inv(S)))
+    
+    print('shape K: ', np.shape(K), 'shape obs operator: ', np.shape(observe_operator),
+          'shape apriory: ', np.shape(apriory_state), 'shape observe: ', np.shape(observe)) 
+
     aposteriory_state = apriory_state + K.dot(observe - observe_operator.dot(apriory_state)) 
+    
+    print('shape aposteriory_state: ', np.shape(aposteriory_state))
     
     return aposteriory_state
 
@@ -317,12 +330,12 @@ def main():
                  tay0_arr=[6700., 6500., 8000], a_arr=[60., 60., 60.],
                  b_arr=[100., 60., 60.], gamma_arr=[0., 45., 0.], v_arr=[1., 1., 1.])
 
-    Model1 = Background(month=9, hour=12, f10p7=120, lon=20)
+    #Model1 = Background(month=9, hour=12, f10p7=120, lon=20)
 
 
     MyGrid = TGrid()
-    rec_tays = [6200, 7500, 8200] # Координата приёмников
-    Rays = CreateRays(rec_tays, MyGrid, data1)
+    rec_tays = [7810] # Координата приёмников
+    Rays = CreateRays(rec_tays, MyGrid, data1.El, data1.Az)
 
     #RHS = ComputeRHS(Rays, Model)
     
@@ -338,7 +351,7 @@ def main():
     
     for j in np.arange(MyGrid.height_nodes):
         for i in np.arange(MyGrid.tay_nodes):
-            apriory_state[i + j * (MyGrid.tay_nodes)] = Model1.zerostate(MyGrid.tay_left 
+            apriory_state[i + j * (MyGrid.tay_nodes)] = Model.zerostate(MyGrid.tay_left 
                             + i * MyGrid.dtay, MyGrid.height_down + j * MyGrid.dheight)
 
     apriory_state_plot = apriory_state.reshape((MyGrid.height_nodes, MyGrid.tay_nodes))
@@ -359,7 +372,7 @@ def main():
     
     
     '''
-      ####################################################### PLOTS ###############                               
+      ################################################### PLOTS #############################################                               
     '''
 ###################################################################################
 
@@ -461,3 +474,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+print('execute time: ', datetime.now() - start_time)
